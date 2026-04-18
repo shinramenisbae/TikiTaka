@@ -43,6 +43,29 @@ class OrderBookSnapshot(BaseModel):
     ask_depth_usdc: float = 0.0
 
 
+class ReputationStats(BaseModel):
+    wallet: str
+    trade_count: int = 0
+    cash_pnl: float = 0.0
+    pct_pnl: float = 0.0            # cash_pnl / total_bought * 100
+    total_bought: float = 0.0
+
+
+class ClusterInfo(BaseModel):
+    """Identifies which cluster a wallet belongs to based on shared funding source.
+
+    `funding_source` is the EOA that first sent USDC to this wallet on Polygon.
+    `is_cex` is True when the funder is on the known-exchange allowlist — in
+    which case the cluster is meaningless (everyone funds from Binance).
+    `resolved` is False when the lookup hasn't happened yet (don't alert).
+    """
+
+    wallet: str
+    funding_source: str | None = None
+    is_cex: bool = False
+    resolved: bool = False
+
+
 class SignalResult(BaseModel):
     name: str
     matched: bool

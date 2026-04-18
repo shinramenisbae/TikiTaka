@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from tikitaka.models import CompositeResult, Trade
+from tikitaka.models import ClusterInfo, CompositeResult, ReputationStats, Trade
 
 
 def _now_iso() -> str:
@@ -56,6 +56,25 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_dedupe
     ON alerts(wallet, market_id, first_alert_ts);
+
+CREATE TABLE IF NOT EXISTS wallet_clusters (
+    wallet          TEXT PRIMARY KEY,
+    funding_source  TEXT,
+    is_cex          INTEGER NOT NULL DEFAULT 0,
+    resolved        INTEGER NOT NULL DEFAULT 0,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_clusters_funder
+    ON wallet_clusters(funding_source);
+
+CREATE TABLE IF NOT EXISTS wallet_reputation (
+    wallet          TEXT PRIMARY KEY,
+    trade_count     INTEGER NOT NULL,
+    cash_pnl        REAL NOT NULL,
+    pct_pnl         REAL NOT NULL,
+    total_bought    REAL NOT NULL,
+    updated_at      TEXT NOT NULL
+);
 """
 
 
@@ -136,6 +155,80 @@ class Database:
             ),
         )
         return int(cur.lastrowid or 0)
+
+    # --- wallet clusters / reputation ------------------------------------
+    def upsert_cluster(self, info: ClusterInfo) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO wallet_clusters
+                (wallet, funding_source, is_cex, resolved, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(wallet) DO UPDATE SET
+                funding_source = excluded.funding_source,
+                is_cex         = excluded.is_cex,
+                resolved       = excluded.resolved,
+                updated_at     = excluded.updated_at
+            """,
+            (
+                info.wallet,
+                info.funding_source,
+                1 if info.is_cex else 0,
+                1 if info.resolved else 0,
+                _now_iso(),
+            ),
+        )
+
+    def upsert_reputation(self, stats: ReputationStats) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO wallet_reputation
+                (wallet, trade_count, cash_pnl, pct_pnl, total_bought, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(wallet) DO UPDATE SET
+                trade_count  = excluded.trade_count,
+                cash_pnl     = excluded.cash_pnl,
+                pct_pnl      = excluded.pct_pnl,
+                total_bought = excluded.total_bought,
+                updated_at   = excluded.updated_at
+            """,
+            (
+                stats.wallet,
+                stats.trade_count,
+                stats.cash_pnl,
+                stats.pct_pnl,
+                stats.total_bought,
+                _now_iso(),
+            ),
+        )
+
+    def cluster_siblings_recent(
+        self,
+        funding_source: str,
+        market_id: str,
+        side: str,
+        window: timedelta,
+        exclude_wallet: str,
+    ) -> list[tuple[str, float]]:
+        """Return (wallet, summed_notional) for wallets sharing `funding_source`
+        that traded (market_id, side) within `window`, excluding the caller.
+        """
+        cutoff = (datetime.now(UTC).replace(tzinfo=None) - window).isoformat()
+        rows = self.conn.execute(
+            """
+            SELECT t.wallet, SUM(t.notional_usdc) AS total
+              FROM trades t
+              JOIN wallet_clusters c ON c.wallet = t.wallet
+             WHERE c.funding_source = ?
+               AND c.is_cex = 0
+               AND t.market_id = ?
+               AND t.side = ?
+               AND t.wallet != ?
+               AND t.timestamp >= ?
+             GROUP BY t.wallet
+            """,
+            (funding_source, market_id, side, exclude_wallet, cutoff),
+        ).fetchall()
+        return [(str(w), float(n)) for w, n in rows]
 
     def bump_alert(self, alert_id: int, composite: CompositeResult) -> None:
         self.conn.execute(

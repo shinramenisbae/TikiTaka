@@ -24,6 +24,19 @@ class Settings(BaseSettings):
     pre_resolution_window_hours: int = 6
     pre_resolution_min_usdc: float = 5000.0
     pre_resolution_price_edge: float = 0.3
+    # Reputation signal: high-PNL wallets placing smaller trades than the $1k floor.
+    reputation_min_trades: int = 50
+    reputation_min_pct_pnl: float = 50.0
+    reputation_min_trade_usdc: float = 100.0
+
+    # Sybil-cluster signal: multiple wallets with shared non-CEX funder trading the
+    # same (market, side) in a short window.
+    sybil_min_cluster_size: int = 3
+    sybil_cluster_window_min: int = 10
+    sybil_min_cluster_notional: float = 5000.0
+    # How far back to scan USDC Transfer logs when resolving a wallet's funder.
+    funding_lookback_days: int = 30
+
     composite_threshold: float = 40.0
     dedupe_window_min: int = 30
 

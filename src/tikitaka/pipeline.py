@@ -13,6 +13,8 @@ from tikitaka.ingest.data_api import DataAPI
 from tikitaka.ingest.gamma import GammaAPI, MarketCatalog
 from tikitaka.ingest.websocket import CLOBWebSocket
 from tikitaka.models import Trade
+from tikitaka.profiler.funding import FundingResolver, cluster_window
+from tikitaka.profiler.reputation import ReputationProfiler
 from tikitaka.profiler.wallet import WalletProfiler
 from tikitaka.storage.archive import ParquetArchive
 from tikitaka.storage.db import Database
@@ -30,6 +32,11 @@ class Pipeline:
         self.gamma = GammaAPI()
         self.data = DataAPI()
         self.profiler = WalletProfiler(settings.polygon_rpc_url)
+        self.reputation = ReputationProfiler()
+        self.funding = FundingResolver(
+            settings.polygon_rpc_url,
+            lookback_days=settings.funding_lookback_days,
+        )
         self.alerter = DiscordAlerter(settings.discord_webhook_url)
         self.dedupe = AlertDeduper(self.db, self.alerter, settings.dedupe_window_min)
         self.catalog = MarketCatalog()
@@ -46,6 +53,8 @@ class Pipeline:
         await self.gamma.close()
         await self.data.close()
         await self.profiler.close()
+        await self.reputation.close()
+        await self.funding.close()
         await self.alerter.close()
         self.archive.flush()
         self.db.close()
@@ -90,12 +99,36 @@ class Pipeline:
 
         profile = await self.profiler.profile(trade.wallet)
         book = self.ws.get_book(trade.asset_id) if self.ws is not None else None
+
+        reputation = await self.reputation.fetch(trade.wallet)
+        self.db.upsert_reputation(reputation)
+
+        cluster = await self.funding.resolve(trade.wallet)
+        self.db.upsert_cluster(cluster)
+
+        siblings: list[tuple[str, float]] = []
+        if (
+            cluster.resolved
+            and not cluster.is_cex
+            and cluster.funding_source is not None
+        ):
+            siblings = self.db.cluster_siblings_recent(
+                funding_source=cluster.funding_source,
+                market_id=trade.market_id,
+                side=trade.side,
+                window=cluster_window(),
+                exclude_wallet=trade.wallet,
+            )
+
         composite = score_trade(
             trade,
             profile=profile,
             market=market,
             book=book,
             settings=self.settings,
+            reputation=reputation,
+            cluster=cluster,
+            cluster_siblings=siblings,
         )
         if composite.alert:
             await self.dedupe.emit(
