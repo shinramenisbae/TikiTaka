@@ -71,14 +71,15 @@ class DataAPI:
         params: dict[str, str | float | int] = {
             "limit": limit,
             "offset": offset,
-            "type": "TRADE",
+            "takerOnly": "false",
         }
-        if min_size > 0:
-            params["filterAmount"] = min_size
-        resp = await self._client.get("/activity", params=params)
+        resp = await self._client.get("/trades", params=params)
         resp.raise_for_status()
         raw = resp.json()
         if not isinstance(raw, list):
             return []
         trades = [_coerce_trade(r) for r in raw]
-        return [t for t in trades if t is not None]
+        filtered = [t for t in trades if t is not None]
+        if min_size > 0:
+            filtered = [t for t in filtered if t.notional_usdc >= min_size]
+        return filtered

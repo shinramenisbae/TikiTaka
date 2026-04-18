@@ -43,7 +43,7 @@ def backfill(
 ) -> None:
     """Pull recent trades from the Data API into SQLite + Parquet archive."""
     _setup_logging(log_level)
-    from scripts.backfill import run_backfill
+    from tikitaka.backfill import run_backfill
 
     settings = load_settings()
     asyncio.run(run_backfill(settings, days=days))
@@ -56,7 +56,7 @@ def backtest(
 ) -> None:
     """Replay archived trades through the detectors without sending alerts."""
     _setup_logging(log_level)
-    from scripts.backtest import run_backtest
+    from tikitaka.backtest import run_backtest
 
     settings = load_settings()
     asyncio.run(run_backtest(settings, days=days))

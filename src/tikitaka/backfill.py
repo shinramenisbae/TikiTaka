@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+
+import httpx
 
 from tikitaka.config import Settings
 from tikitaka.ingest.data_api import DataAPI
@@ -18,11 +20,22 @@ async def run_backfill(settings: Settings, *, days: int) -> None:
     data = DataAPI()
     db = Database(settings.db_path)
     archive = ParquetArchive(settings.parquet_dir)
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
     total = 0
     try:
         for page in range(MAX_PAGES):
-            trades = await data.recent_trades(limit=PAGE_SIZE, offset=page * PAGE_SIZE)
+            try:
+                trades = await data.recent_trades(
+                    limit=PAGE_SIZE, offset=page * PAGE_SIZE
+                )
+            except httpx.HTTPStatusError as e:
+                # API caps pagination depth — stop cleanly.
+                log.info(
+                    "Pagination stopped at offset %d (%s)",
+                    page * PAGE_SIZE,
+                    e.response.status_code,
+                )
+                break
             if not trades:
                 break
             kept = 0
